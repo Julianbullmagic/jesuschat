@@ -13,6 +13,10 @@ const folderPath = "C:/Users/Julia/OneDrive/Documents/Coding Assistant - Copy";
 
 const CHARACTER_PERSONA = "You are Jesus, the community focussed Jesus of the Hutterites, Bruderhofs, Mennonites and Amish people. Role-play as this character.";
 const ALLOWED_ORIGIN = process.env.CORS_ORIGIN || "*";
+const multer = require('multer');
+const pdfParse = require('pdf-parse');
+const mammoth = require('mammoth');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 async function getSummaries() {
   try {
@@ -54,21 +58,28 @@ async function getSummaries() {
 
 async function cleanupOldRecords() {
   try {
-    // Delete all records except the 20 most recent ones
-    const { error } = await supabase
+    // Keep the 20 most recent rows, delete the rest
+    const { data: keepRows, error: keepErr } = await supabase
+      .from('Jesus')
+      .select('id')
+      .order('created_at', { ascending: false })
+      .limit(20);
+
+    if (keepErr) {
+      console.error('Error selecting rows to keep:', keepErr);
+      return;
+    }
+
+    const keepIds = (keepRows || []).map(r => r.id);
+    if (keepIds.length === 0) return;
+
+    const { error: delErr } = await supabase
       .from('Jesus')
       .delete()
-      .lt('created_at', 
-        supabase
-          .from('Jesus')
-          .select('created_at')
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .offset(19)
-      );
-    
-    if (error) {
-      console.error('Error cleaning up old records:', error);
+      .not('id', 'in', keepIds);
+
+    if (delErr) {
+      console.error('Error cleaning up old records:', delErr);
     }
   } catch (error) {
     console.error('Error in cleanupOldRecords:', error);
@@ -90,7 +101,8 @@ app.use((req, res, next) => {
   next();
 });
 // const port = 3000
-const server = app.listen(process.env.PORT, () => console.log(`Server listening on port ${process.env.PORT}`))
+const PORT = process.env.PORT || 3000
+const server = app.listen(PORT, () => console.log(`Server listening on port ${PORT}`))
 const io = new Server(server, {
   cors: {
     origin: ALLOWED_ORIGIN,
@@ -100,7 +112,11 @@ const io = new Server(server, {
 let conversationSummariesShort=[]
 let conversationSummariesLong=[]
 let summariesalreadyretrieved=[]
-  getSummaries()
+  if (supabaseUrl && supabaseAnonKey) {
+    getSummaries()
+  } else {
+    console.warn('Supabase ENV missing: set SUPABASEURL and SUPABASEKEY to enable summaries retrieval.')
+  }
   
 
   // You are my loyal Robot droid sidekick called Tim. Your name is Tim. 
@@ -115,6 +131,58 @@ app.use(express.static(path.join(__dirname, 'public')))
 app.get('/healthz', (req, res) => {
   res.status(200).send('ok')
 })
+
+// Ingest endpoint: accepts PDF/DOCX/TXT, extracts text, returns chunks
+app.post('/api/ingest', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' })
+    }
+    const originalName = req.file.originalname || ''
+    const lower = originalName.toLowerCase()
+    let text = ''
+    if (lower.endsWith('.pdf')) {
+      const parsed = await pdfParse(req.file.buffer)
+      text = parsed.text || ''
+    } else if (lower.endsWith('.docx')) {
+      const result = await mammoth.extractRawText({ buffer: req.file.buffer })
+      text = result.value || ''
+    } else if (lower.endsWith('.txt')) {
+      text = req.file.buffer.toString('utf8')
+    } else {
+      return res.status(400).json({ error: 'Unsupported file type. Use PDF, DOCX, or TXT.' })
+    }
+
+    const chunks = createTextChunks(text, 3500, 400)
+    return res.json({ name: originalName, chunksCount: chunks.length, chunks })
+  } catch (err) {
+    console.error('Ingest error:', err)
+    return res.status(500).json({ error: 'Failed to process document' })
+  }
+})
+
+function createTextChunks(inputText, maxChunkChars = 3500, overlapChars = 400) {
+  if (!inputText || typeof inputText !== 'string') return []
+  const normalized = inputText.replace(/\r\n/g, '\n').replace(/\t/g, '  ')
+  const chunks = []
+  let start = 0
+  while (start < normalized.length) {
+    let end = Math.min(start + maxChunkChars, normalized.length)
+    // try to break on a sentence boundary
+    const window = normalized.slice(start, end)
+    const lastPeriod = window.lastIndexOf('.')
+    const lastNewline = window.lastIndexOf('\n')
+    const breakAt = Math.max(lastPeriod, lastNewline)
+    if (breakAt > 500) {
+      end = start + breakAt + 1
+    }
+    const piece = normalized.slice(start, end).trim()
+    if (piece.length > 0) chunks.push(piece)
+    if (end >= normalized.length) break
+    start = Math.max(0, end - overlapChars)
+  }
+  return chunks
+}
 
 function estimateTokenCount(text) {
   return Math.ceil(text.length / 4);

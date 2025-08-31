@@ -13,6 +13,11 @@
       </header>
       <main>
         <div id="messages"></div>
+        <div id="uploader">
+          <input id="file-input" type="file" accept=".pdf,.docx,.txt" />
+          <button id="upload-btn" type="button">Attach document</button>
+          <span id="upload-status"></span>
+        </div>
         <form id="chat-form">
           <input id="chat-input" type="text" placeholder="Type a message..." autocomplete="off" />
           <button type="submit">Send</button>
