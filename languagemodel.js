@@ -16,7 +16,7 @@ const ALLOWED_ORIGIN = process.env.CORS_ORIGIN || "*";
 const multer = require('multer');
 const pdfParse = require('pdf-parse');
 const mammoth = require('mammoth');
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 async function getSummaries() {
   try {
@@ -190,6 +190,7 @@ function estimateTokenCount(text) {
 
 
 io.on('connection', (socket) => {
+  console.log('Client connected', socket.id)
   socket.emit('starting new conversation', JSON.stringify(conversationSummariesShort))
 
   let conversation = [] 
@@ -197,35 +198,48 @@ io.on('connection', (socket) => {
 
 
   socket.on('chat message', async (messageData) => {
-    let conversation = JSON.parse(messageData) 
-    if (!conversation.some(m => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith(CHARACTER_PERSONA))) {
-      conversation.unshift({ role: 'system', content: CHARACTER_PERSONA })
-    }
-    let latestmessage=conversation[conversation.length-1]
-    let earlierConvos=await checkIfMessageRefersToEarlierConversation(latestmessage,conversationSummariesShort)
-    earlierConvos=JSON.parse(earlierConvos)
-    let longSummaries=[]
-    if(earlierConvos instanceof Array){
-      if(earlierConvos.length>0){
-        for(let convo of earlierConvos){
-          for(let conversation of conversationSummariesLong){
-            if(conversation.id==convo){
-              if(!summariesalreadyretrieved.includes(conversation.id)){
-                longSummaries.push(conversation)
-                summariesalreadyretrieved.push(conversation.id)
-              }
-              if(summariesalreadyretrieved.includes(conversation.id)){
-                console.log("old conversation already been retrieved for this conversation")
+    try {
+      console.log('chat message received')
+      let conversation = JSON.parse(messageData) 
+      if (!conversation.some(m => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith(CHARACTER_PERSONA))) {
+        conversation.unshift({ role: 'system', content: CHARACTER_PERSONA })
+      }
+      let latestmessage=conversation[conversation.length-1]
+      let earlierConvos=await checkIfMessageRefersToEarlierConversation(latestmessage,conversationSummariesShort)
+      earlierConvos=JSON.parse(earlierConvos)
+      let longSummaries=[]
+      if(earlierConvos instanceof Array){
+        if(earlierConvos.length>0){
+          for(let convo of earlierConvos){
+            for(let conversation of conversationSummariesLong){
+              if(conversation.id==convo){
+                if(!summariesalreadyretrieved.includes(conversation.id)){
+                  longSummaries.push(conversation)
+                  summariesalreadyretrieved.push(conversation.id)
+                }
+                if(summariesalreadyretrieved.includes(conversation.id)){
+                  console.log("old conversation already been retrieved for this conversation")
+                }
               }
             }
           }
         }
       }
+      conversation.push({role:`system`,content:`The user is referring back to an earlier conversation or conversations they had with you. 
+        Here is a summary or summaries to refresh your memory. "${JSON.stringify(longSummaries)}"`})
+      const response = await getSingleResponse(conversation)
+      let messageToSend
+      if (response && response.message && response.message.content) {
+        messageToSend = response.message
+      } else {
+        messageToSend = { role: 'assistant', content: 'Sorry, I could not generate a response just now.' }
+      }
+      socket.emit('chat response', JSON.stringify(messageToSend))
+    } catch (err) {
+      console.error('chat message handler error', err)
+      const fallback = { role: 'assistant', content: 'An error occurred handling your message.' }
+      socket.emit('chat response', JSON.stringify(fallback))
     }
-    conversation.push({role:`system`,content:`The user is referring back to an earlier conversation or conversations they had with you. 
-      Here is a summary or summaries to refresh your memory. "${JSON.stringify(longSummaries)}"`})
-    const response = await getSingleResponse(conversation)
-    socket.emit('chat response', JSON.stringify(response['message']))
   })
 
 
@@ -239,7 +253,7 @@ io.on('connection', (socket) => {
 
 
   socket.on('disconnect', () => {
-    console.log('Client disconnected')
+    console.log('Client disconnected', socket.id)
     conversation = [] // Clear conversation array on disconnect
   })
 })
@@ -280,56 +294,59 @@ io.on('connection', (socket) => {
 
 
   async function summarizeConversationAndSaveConversations(conversation) {
-    console.log('Summarizing conversation:', conversation);
+    try {
+      const parsed = typeof conversation === 'string' ? JSON.parse(conversation) : conversation
+      if (!Array.isArray(parsed) || parsed.length === 0) return
 
-    if (!fs.existsSync(folderPath)) {
-        console.error('Folder path does not exist:', folderPath);
-        return;
+      const systemPrompt = `You are to summarize a chat conversation. Return strict JSON with two fields: \n` +
+        `{"shortsummary": string (<=3 sentences, user-centric), "longsummary": string (detailed but concise)}.\n` +
+        `Do not include markdown fences. Keep names and key facts.`
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: JSON.stringify(parsed) }
+        ],
+        max_tokens: 800
+      })
+
+      const raw = completion.choices[0]?.message?.content || '{}'
+      let summaryObj
+      try {
+        summaryObj = JSON.parse(raw)
+      } catch (_) {
+        // fallback: try to extract JSON substring
+        const match = raw.match(/\{[\s\S]*\}/)
+        summaryObj = match ? JSON.parse(match[0]) : { shortsummary: '', longsummary: '' }
+      }
+
+      const shortsummary = String(summaryObj.shortsummary || '').trim()
+      const longsummary = String(summaryObj.longsummary || '').trim()
+      if (!shortsummary || !longsummary) return
+
+      // Insert into Supabase table "Jesus"
+      const { data, error } = await supabase
+        .from('Jesus')
+        .insert({ shortsummaries: shortsummary, longsummaries: longsummary })
+        .select('*')
+        .single()
+
+      if (error) {
+        console.error('Error inserting summary:', error)
+        return
+      }
+
+      // Update in-memory caches
+      conversationSummariesShort.unshift({ id: data.id, shortsummary })
+      conversationSummariesLong.unshift({ id: data.id, longsummary })
+      // Trim caches to 30
+      conversationSummariesShort = conversationSummariesShort.slice(0, 30)
+      conversationSummariesLong = conversationSummariesLong.slice(0, 30)
+    } catch (err) {
+      console.error('Error summarizing conversation:', err)
     }
-
-    fs.readdir(folderPath, async (err, files) => {
-        if (err) {
-            console.error('Unable to read folder:', err);
-            return;
-        }
-
-        const summaryPromises = files.map(async (file) => {
-            const filePath = path.join(folderPath, file);
-
-            if (filePath.endsWith('.js') || filePath.endsWith('.html')) {
-                try {
-                    const content = await fs.promises.readFile(filePath, 'utf-8');
-
-                    console.log(`Content of ${file}:`);
-                    console.log(content);
-                    let tokenEstimate=estimateTokenCount(content)
-                    if(tokenEstimate>16000){
-                      let numofsplits=Math.ceil(tokenEstimate/16000)
-                      content=content
-                    }
-                    const summary = await openai.chat.completions.create({
-                      messages: [{ role: "system", content: `Summarize the following code file, describing its main features. If it is JavaScript, describe what each function does, focusing on accurate descriptions of the inputs and outputs. The summary should be about a quarter the length of the actual code file:\n\n${content}` }],
-                      max_tokens:16000,
-                      model: "gpt-4o-mini",
-                    }).catch(function(reason) {
-                      console.log("error", reason);
-                    });
-
-                    const summarizedContent = summary.data.choices[0].message.content;
-                    console.log(`Summary of ${file}:`);
-                    console.log(summarizedContent);
-
-                    // Here you can save the summaries to your database
-
-                } catch (err) {
-                    console.error(`Error processing file ${file}:`, err);
-                }
-            }
-        });
-
-        await Promise.all(summaryPromises);
-    });
-}
+  }
 
 
 

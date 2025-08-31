@@ -10,21 +10,31 @@
     <div id="app">
       <header>
         <h1>JesusChat</h1>
+        <div id="conn-status" class="status">Connecting…</div>
       </header>
       <main>
+        <div id="token-warning" hidden></div>
         <div id="messages"></div>
         <div id="uploader">
           <input id="file-input" type="file" accept=".pdf,.docx,.txt" />
           <button id="upload-btn" type="button">Attach document</button>
           <span id="upload-status"></span>
         </div>
+        <div id="controls">
+          <button id="end-chat" type="button">End chat</button>
+        </div>
         <form id="chat-form">
           <input id="chat-input" type="text" placeholder="Type a message..." autocomplete="off" />
           <button type="submit">Send</button>
         </form>
+        <div id="overlay" hidden>
+          <div class="spinner"></div>
+          <div class="overlay-text">Generating response...</div>
+          <button id="overlay-close" type="button" aria-label="Close">×</button>
+        </div>
       </main>
     </div>
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" integrity="sha384-aD9jV4h0AXS3pM3q2H0j0m8D1V5O0ivW4KUL8T6fBfycYyV+8Y6QmQmZz9Vh4H2C" crossorigin="anonymous"></script>
+    <script src="/socket.io/socket.io.js"></script>
     <script src="/app.js"></script>
   </body>
   </html>
