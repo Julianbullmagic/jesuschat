@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: language-model-with-long-term-memory
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: OPENAIKEY
+        sync: false
+      - key: SUPABASEURL
+        sync: false
+      - key: SUPABASEKEY
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false
+

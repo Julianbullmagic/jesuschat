@@ -1,0 +1,14 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background:#f6f7fb; }
+#app { max-width: 800px; margin: 0 auto; height: 100vh; display: flex; flex-direction: column; }
+header { padding: 16px; background:#222; color:#fff; }
+main { flex: 1; display: flex; flex-direction: column; padding: 16px; gap: 12px; }
+#messages { flex: 1; overflow-y: auto; background:#fff; border:1px solid #e5e7eb; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.msg { padding: 10px 12px; border-radius: 10px; max-width: 75%; }
+.msg-user { align-self: flex-end; background:#DCFCE7; border:1px solid #86EFAC; }
+.msg-assistant { align-self: flex-start; background:#F1F5F9; border:1px solid #E2E8F0; }
+#chat-form { display: flex; gap: 8px; }
+#chat-input { flex: 1; padding: 10px 12px; border:1px solid #cbd5e1; border-radius: 8px; }
+button { padding: 10px 14px; border-radius: 8px; border: none; background:#2563EB; color:#fff; cursor: pointer; }
+button:hover { background:#1D4ED8; }
+
