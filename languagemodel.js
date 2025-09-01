@@ -416,6 +416,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     console.log('Client disconnected', socket.id)
     conversation = [] // Clear conversation array on disconnect
+    try { socketIdToDocs.delete(socket.id) } catch (_) {}
   })
 })
 
